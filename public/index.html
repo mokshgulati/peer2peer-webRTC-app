@@ -32,6 +32,13 @@
             </div>
             <div class="chat-container">
                 <div class="chat-messages" id="chatMessages"></div>
+                <div class="file-transfer">
+                    <div class="file-input">
+                        <label for="fileInput" class="file-label">📎</label>
+                        <input type="file" id="fileInput" style="display: none;">
+                    </div>
+                    <div id="fileStatus"></div>
+                </div>
                 <div class="chat-input">
                     <input type="text" id="messageInput" placeholder="Type a message...">
                     <button id="sendMessage">Send</button>
@@ -43,6 +50,7 @@
                 <button id="hangupButton" disabled>Hang Up</button>
                 <button id="toggleAudio" class="icon-button">🎤</button>
                 <button id="toggleVideo" class="icon-button">📹</button>
+                <button id="screenShareButton" class="icon-button" disabled>🖥️</button>
                 <button id="testConnection" disabled>Test Connection</button>
             </div>
         </div>

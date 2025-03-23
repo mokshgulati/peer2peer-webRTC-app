@@ -8,6 +8,8 @@ A real-time peer-to-peer video chat application built with WebRTC, Socket.IO, an
 - 🎥 Real-time video and audio communication
 - 💬 Text chat functionality
 - 🔇 Audio and video controls
+- 🖥️ Screen sharing functionality
+- 📁 File transfer capabilities
 - 📱 Responsive design for mobile devices
 - 👥 User presence and status
 - 🔄 Automatic connection handling
@@ -100,8 +102,11 @@ If you encounter the error `ENOENT: no such file or directory, uv_cwd` or other 
 5. Use the media controls to:
    - Toggle audio (🎤)
    - Toggle video (📹)
+   - Share your screen (🖥️)
    - End call (Hang Up button)
 6. Use the chat feature to send text messages during the call
+7. Send files by clicking the attachment icon (📎) in the chat
+8. Download received files by clicking the "Download" button on file messages
 
 ## Technical Details
 

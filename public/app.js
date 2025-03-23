@@ -11,8 +11,11 @@ const sendMessageButton = document.getElementById('sendMessage');
 const chatMessages = document.getElementById('chatMessages');
 const toggleAudioButton = document.getElementById('toggleAudio');
 const toggleVideoButton = document.getElementById('toggleVideo');
+const screenShareButton = document.getElementById('screenShareButton');
 const connectionStatusElement = document.getElementById('connectionStatus');
 const testConnectionButton = document.getElementById('testConnection');
+const fileInput = document.getElementById('fileInput');
+const fileStatus = document.getElementById('fileStatus');
 
 // WebRTC Configuration
 const configuration = {
@@ -29,6 +32,13 @@ let currentUserId = null;
 let selectedUserId = null;
 let isAudioEnabled = true;
 let isVideoEnabled = true;
+let screenShareStream = null;
+let isScreenSharing = false;
+let dataChannel = null;
+let fileChunks = [];
+let currentFile = null;
+let receivedFileSize = 0;
+let fileTransferInProgress = false;
 
 // Generate a random user ID
 function generateUserId() {
@@ -92,6 +102,7 @@ async function startLocalStream() {
         startButton.disabled = true;
         toggleAudioButton.disabled = false;
         toggleVideoButton.disabled = false;
+        screenShareButton.disabled = false;
     } catch (error) {
         console.error('Error accessing media devices:', error);
         alert('Error accessing camera and microphone. Please ensure you have granted the necessary permissions.');
@@ -110,6 +121,19 @@ function createPeerConnection() {
     // Handle incoming remote stream
     peerConnection.ontrack = (event) => {
         remoteVideo.srcObject = event.streams[0];
+    };
+
+    // Create data channel for file transfer and chat
+    dataChannel = peerConnection.createDataChannel('fileTransfer', {
+        ordered: true
+    });
+    
+    setupDataChannel(dataChannel);
+    
+    // Handle remote data channel
+    peerConnection.ondatachannel = (event) => {
+        dataChannel = event.channel;
+        setupDataChannel(dataChannel);
     };
 
     // Handle ICE candidates
@@ -135,6 +159,183 @@ function createPeerConnection() {
     };
 
     return peerConnection;
+}
+
+// Setup the data channel for handling file transfers and messages
+function setupDataChannel(channel) {
+    channel.onopen = () => {
+        console.log('Data channel is open');
+    };
+    
+    channel.onclose = () => {
+        console.log('Data channel is closed');
+    };
+    
+    channel.onerror = (error) => {
+        console.error('Data channel error:', error);
+    };
+    
+    channel.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        
+        if (data.type === 'chat') {
+            handleChatMessage({
+                from: data.from,
+                message: data.message
+            });
+        } else if (data.type === 'file-info') {
+            // Prepare to receive file
+            fileChunks = [];
+            receivedFileSize = 0;
+            currentFile = {
+                name: data.name,
+                size: data.size,
+                type: data.fileType
+            };
+            fileStatus.textContent = `Receiving file: ${data.name} (0%)`;
+        } else if (data.type === 'file-chunk') {
+            // Convert base64 to blob and add to chunks
+            const base64Data = data.chunk;
+            const binary = atob(base64Data);
+            const array = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                array[i] = binary.charCodeAt(i);
+            }
+            
+            // Add to chunks and update progress
+            fileChunks.push(array);
+            receivedFileSize += array.length;
+            
+            // Update progress
+            const progress = Math.floor((receivedFileSize / currentFile.size) * 100);
+            fileStatus.textContent = `Receiving file: ${currentFile.name} (${progress}%)`;
+        } else if (data.type === 'file-complete') {
+            // Combine chunks and create download link
+            const blob = new Blob(fileChunks, { type: currentFile.type });
+            displayFileMessage(currentFile.name, currentFile.size, blob, false);
+            
+            fileStatus.textContent = 'File received successfully';
+            fileChunks = [];
+            currentFile = null;
+            receivedFileSize = 0;
+        }
+    };
+}
+
+// Handle sending a file
+function handleFileSelect(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    if (!dataChannel || dataChannel.readyState !== 'open') {
+        alert('Unable to transfer file. No active connection.');
+        return;
+    }
+    
+    if (fileTransferInProgress) {
+        alert('Please wait for the current file transfer to complete.');
+        return;
+    }
+    
+    fileTransferInProgress = true;
+    fileStatus.textContent = `Sending file: ${file.name} (0%)`;
+    
+    // Send file info
+    dataChannel.send(JSON.stringify({
+        type: 'file-info',
+        name: file.name,
+        size: file.size,
+        fileType: file.type,
+        from: currentUserId
+    }));
+    
+    // Read and send the file in chunks
+    const chunkSize = 16384; // 16KB chunks
+    const reader = new FileReader();
+    let offset = 0;
+    
+    reader.onload = (e) => {
+        const data = e.target.result;
+        // Send the data as a base64 string
+        dataChannel.send(JSON.stringify({
+            type: 'file-chunk',
+            chunk: btoa(String.fromCharCode.apply(null, new Uint8Array(data)))
+        }));
+        
+        offset += data.byteLength;
+        const progress = Math.floor((offset / file.size) * 100);
+        fileStatus.textContent = `Sending file: ${file.name} (${progress}%)`;
+        
+        if (offset < file.size) {
+            // Read the next chunk
+            readSlice(offset);
+        } else {
+            // File transfer complete
+            dataChannel.send(JSON.stringify({
+                type: 'file-complete'
+            }));
+            fileStatus.textContent = 'File sent successfully';
+            fileTransferInProgress = false;
+            
+            // Create a local display of the sent file
+            displayFileMessage(file.name, file.size, file, true);
+        }
+    };
+    
+    reader.onerror = (error) => {
+        console.error('Error reading file:', error);
+        fileStatus.textContent = 'Error sending file';
+        fileTransferInProgress = false;
+    };
+    
+    function readSlice(offset) {
+        const slice = file.slice(offset, offset + chunkSize);
+        reader.readAsArrayBuffer(slice);
+    }
+    
+    readSlice(0);
+}
+
+// Display file message in chat
+function displayFileMessage(fileName, fileSize, fileData, isSent) {
+    const messageElement = document.createElement('div');
+    messageElement.classList.add('file-message');
+    messageElement.classList.add(isSent ? 'sent' : 'received');
+    
+    const formatFileSize = (bytes) => {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / 1048576).toFixed(1) + ' MB';
+    };
+    
+    messageElement.innerHTML = `
+        <div class="file-icon">📄</div>
+        <div class="file-info">
+            <div class="file-name">${fileName}</div>
+            <div class="file-size">${formatFileSize(fileSize)}</div>
+        </div>
+    `;
+    
+    // Add download button for received files
+    if (!isSent) {
+        const downloadButton = document.createElement('button');
+        downloadButton.classList.add('file-download');
+        downloadButton.textContent = 'Download';
+        downloadButton.onclick = () => {
+            const url = URL.createObjectURL(fileData);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        };
+        messageElement.appendChild(downloadButton);
+    }
+    
+    chatMessages.appendChild(messageElement);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
 // Handle incoming offer
@@ -194,11 +395,28 @@ function handleChatMessage(data) {
 function sendMessage() {
     const message = messageInput.value.trim();
     if (message && selectedUserId) {
-        socket.emit('chat-message', {
-            target: selectedUserId,
-            from: currentUserId,
-            message: message
-        });
+        // If data channel is open, send directly through it
+        if (dataChannel && dataChannel.readyState === 'open') {
+            dataChannel.send(JSON.stringify({
+                type: 'chat',
+                message: message,
+                from: currentUserId
+            }));
+            
+            // Display the sent message locally
+            handleChatMessage({
+                from: currentUserId,
+                message: message
+            });
+        } else {
+            // Fall back to signaling server for message relay
+            socket.emit('chat-message', {
+                target: selectedUserId,
+                from: currentUserId,
+                message: message
+            });
+        }
+        
         messageInput.value = '';
     }
 }
@@ -225,6 +443,94 @@ function toggleVideo() {
             isVideoEnabled = videoTrack.enabled;
             toggleVideoButton.textContent = isVideoEnabled ? '📹' : '🚫';
             toggleVideoButton.classList.toggle('muted', !isVideoEnabled);
+        }
+    }
+}
+
+// Toggle screen sharing
+async function toggleScreenShare() {
+    if (!isScreenSharing) {
+        try {
+            screenShareStream = await navigator.mediaDevices.getDisplayMedia({
+                video: true
+            });
+            
+            // Store current video track to restore later
+            const videoTrack = localStream.getVideoTracks()[0];
+            const screenTrack = screenShareStream.getVideoTracks()[0];
+            
+            // If in active call, replace the track in the peer connection
+            if (peerConnection) {
+                const senders = peerConnection.getSenders();
+                const videoSender = senders.find(sender => 
+                    sender.track.kind === 'video'
+                );
+                if (videoSender) {
+                    videoSender.replaceTrack(screenTrack);
+                }
+            }
+            
+            // Replace video track in the local stream
+            localStream.removeTrack(videoTrack);
+            localStream.addTrack(screenTrack);
+            
+            // Update local video display
+            localVideo.srcObject = localStream;
+            
+            // Listen for the screen share ending
+            screenTrack.onended = () => {
+                toggleScreenShare();
+            };
+            
+            isScreenSharing = true;
+            screenShareButton.textContent = '📹';
+            screenShareButton.classList.add('active');
+            
+        } catch (error) {
+            console.error('Error sharing screen:', error);
+            alert('Error sharing screen. Please ensure you have granted the necessary permissions.');
+        }
+    } else {
+        // Stop screen sharing and revert to camera
+        if (screenShareStream) {
+            screenShareStream.getTracks().forEach(track => track.stop());
+            screenShareStream = null;
+        }
+        
+        try {
+            // Get a new video track from the camera
+            const newStream = await navigator.mediaDevices.getUserMedia({ video: true });
+            const cameraTrack = newStream.getVideoTracks()[0];
+            
+            // If in active call, replace the track in the peer connection
+            if (peerConnection) {
+                const senders = peerConnection.getSenders();
+                const videoSender = senders.find(sender => 
+                    sender.track.kind === 'video'
+                );
+                if (videoSender) {
+                    videoSender.replaceTrack(cameraTrack);
+                }
+            }
+            
+            // Replace screen share track with camera track
+            const oldTrack = localStream.getVideoTracks()[0];
+            if (oldTrack) {
+                localStream.removeTrack(oldTrack);
+                oldTrack.stop();
+            }
+            localStream.addTrack(cameraTrack);
+            
+            // Update local video display
+            localVideo.srcObject = localStream;
+            
+            isScreenSharing = false;
+            screenShareButton.textContent = '🖥️';
+            screenShareButton.classList.remove('active');
+            
+        } catch (error) {
+            console.error('Error reverting to camera:', error);
+            alert('Error reverting to camera. Please refresh the page.');
         }
     }
 }
@@ -336,6 +642,8 @@ messageInput.addEventListener('keypress', (e) => {
 });
 toggleAudioButton.addEventListener('click', toggleAudio);
 toggleVideoButton.addEventListener('click', toggleVideo);
+screenShareButton.addEventListener('click', toggleScreenShare);
+fileInput.addEventListener('change', handleFileSelect);
 if (testConnectionButton) {
     testConnectionButton.addEventListener('click', testConnection);
 }
