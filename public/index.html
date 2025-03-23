@@ -51,7 +51,24 @@
                 <button id="toggleAudio" class="icon-button">🎤</button>
                 <button id="toggleVideo" class="icon-button">📹</button>
                 <button id="screenShareButton" class="icon-button" disabled>🖥️</button>
+                <button id="recordButton" class="icon-button" disabled>⚫</button>
+                <button id="whiteboardButton" class="icon-button" disabled>✏️</button>
                 <button id="testConnection" disabled>Test Connection</button>
+            </div>
+            <div class="whiteboard-container" style="display: none;">
+                <div class="whiteboard-toolbar">
+                    <button id="penTool" class="tool-button active">✏️</button>
+                    <button id="eraserTool" class="tool-button">🧽</button>
+                    <input type="color" id="colorPicker" value="#000000">
+                    <select id="penSize">
+                        <option value="2">Thin</option>
+                        <option value="5" selected>Medium</option>
+                        <option value="10">Thick</option>
+                    </select>
+                    <button id="clearWhiteboard" class="tool-button">🗑️</button>
+                    <button id="closeWhiteboard" class="tool-button">✕</button>
+                </div>
+                <canvas id="whiteboard"></canvas>
             </div>
         </div>
     </div>

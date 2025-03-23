@@ -10,6 +10,8 @@ A real-time peer-to-peer video chat application built with WebRTC, Socket.IO, an
 - 🔇 Audio and video controls
 - 🖥️ Screen sharing functionality
 - 📁 File transfer capabilities
+- 🔴 Call recording with split-screen view
+- ✏️ Interactive whiteboard collaboration
 - 📱 Responsive design for mobile devices
 - 👥 User presence and status
 - 🔄 Automatic connection handling
@@ -103,10 +105,18 @@ If you encounter the error `ENOENT: no such file or directory, uv_cwd` or other 
    - Toggle audio (🎤)
    - Toggle video (📹)
    - Share your screen (🖥️)
+   - Record your call (⚫)
+   - Open collaborative whiteboard (✏️)
    - End call (Hang Up button)
 6. Use the chat feature to send text messages during the call
 7. Send files by clicking the attachment icon (📎) in the chat
 8. Download received files by clicking the "Download" button on file messages
+9. Access your call recordings from the chat area after stopping the recording
+10. Use the whiteboard to collaboratively draw or explain ideas with the following tools:
+    - Pen tool for drawing (✏️)
+    - Eraser for removing mistakes (🧽)
+    - Color picker for different colors
+    - Line thickness options
 
 ## Technical Details
 

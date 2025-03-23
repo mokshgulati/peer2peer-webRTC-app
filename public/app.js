@@ -12,6 +12,16 @@ const chatMessages = document.getElementById('chatMessages');
 const toggleAudioButton = document.getElementById('toggleAudio');
 const toggleVideoButton = document.getElementById('toggleVideo');
 const screenShareButton = document.getElementById('screenShareButton');
+const recordButton = document.getElementById('recordButton');
+const whiteboardButton = document.getElementById('whiteboardButton');
+const whiteboardContainer = document.querySelector('.whiteboard-container');
+const whiteboard = document.getElementById('whiteboard');
+const penTool = document.getElementById('penTool');
+const eraserTool = document.getElementById('eraserTool');
+const colorPicker = document.getElementById('colorPicker');
+const penSize = document.getElementById('penSize');
+const clearWhiteboard = document.getElementById('clearWhiteboard');
+const closeWhiteboard = document.getElementById('closeWhiteboard');
 const connectionStatusElement = document.getElementById('connectionStatus');
 const testConnectionButton = document.getElementById('testConnection');
 const fileInput = document.getElementById('fileInput');
@@ -39,6 +49,16 @@ let fileChunks = [];
 let currentFile = null;
 let receivedFileSize = 0;
 let fileTransferInProgress = false;
+let mediaRecorder = null;
+let recordedChunks = [];
+let isRecording = false;
+let isWhiteboardVisible = false;
+let isDrawing = false;
+let currentTool = 'pen';
+let whiteboardCtx = null;
+let lastX = 0;
+let lastY = 0;
+let throttleTimer = null;
 
 // Generate a random user ID
 function generateUserId() {
@@ -103,6 +123,8 @@ async function startLocalStream() {
         toggleAudioButton.disabled = false;
         toggleVideoButton.disabled = false;
         screenShareButton.disabled = false;
+        recordButton.disabled = false;
+        whiteboardButton.disabled = false;
     } catch (error) {
         console.error('Error accessing media devices:', error);
         alert('Error accessing camera and microphone. Please ensure you have granted the necessary permissions.');
@@ -218,6 +240,12 @@ function setupDataChannel(channel) {
             fileChunks = [];
             currentFile = null;
             receivedFileSize = 0;
+        } else if (data.type === 'whiteboard-draw') {
+            // Handle incoming whiteboard data
+            drawRemoteStroke(data.startX, data.startY, data.endX, data.endY, data.color, data.width, data.tool);
+        } else if (data.type === 'whiteboard-clear') {
+            // Clear the whiteboard on remote clear command
+            clearWhiteboardCanvas();
         }
     };
 }
@@ -535,6 +563,299 @@ async function toggleScreenShare() {
     }
 }
 
+// Toggle recording of the call
+function toggleRecording() {
+    if (!isRecording) {
+        startRecording();
+    } else {
+        stopRecording();
+    }
+}
+
+// Start recording the call
+function startRecording() {
+    if (!peerConnection || !remoteVideo.srcObject) {
+        alert('Cannot start recording. No active call.');
+        return;
+    }
+
+    recordedChunks = [];
+    
+    try {
+        // Create a new stream that combines both local and remote video/audio
+        const localVideoTrack = localStream.getVideoTracks()[0];
+        const localAudioTrack = localStream.getAudioTracks()[0];
+        const remoteStream = remoteVideo.srcObject;
+        const remoteVideoTrack = remoteStream.getVideoTracks()[0];
+        const remoteAudioTrack = remoteStream.getAudioTracks()[0];
+        
+        // Create a canvas to combine the videos side by side
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const width = 1280;  // Combined width
+        const height = 720;  // Height
+        canvas.width = width;
+        canvas.height = height;
+        
+        // Create a video processing element for local video
+        const localVideoElem = document.createElement('video');
+        localVideoElem.srcObject = new MediaStream([localVideoTrack]);
+        localVideoElem.autoplay = true;
+        localVideoElem.muted = true;
+        localVideoElem.play().catch(e => console.error("Error playing local video:", e));
+        
+        // Create a video processing element for remote video
+        const remoteVideoElem = document.createElement('video');
+        remoteVideoElem.srcObject = new MediaStream([remoteVideoTrack]);
+        remoteVideoElem.autoplay = true;
+        remoteVideoElem.play().catch(e => console.error("Error playing remote video:", e));
+        
+        // Create an audio context to mix the audio
+        const audioContext = new AudioContext();
+        const destination = audioContext.createMediaStreamDestination();
+        
+        // Add local audio to the mix if available
+        if (localAudioTrack) {
+            const localAudioSource = audioContext.createMediaStreamSource(new MediaStream([localAudioTrack]));
+            localAudioSource.connect(destination);
+        }
+        
+        // Add remote audio to the mix if available
+        if (remoteAudioTrack) {
+            const remoteAudioSource = audioContext.createMediaStreamSource(new MediaStream([remoteAudioTrack]));
+            remoteAudioSource.connect(destination);
+        }
+        
+        // Create a function to draw the videos on the canvas
+        function drawVideos() {
+            try {
+                // Clear the canvas first
+                ctx.fillStyle = "#000000";
+                ctx.fillRect(0, 0, width, height);
+                
+                // Draw local video on the left half
+                if (localVideoElem.readyState >= 2) {
+                    ctx.drawImage(localVideoElem, 0, 0, width/2, height);
+                }
+                
+                // Draw remote video on the right half
+                if (remoteVideoElem.readyState >= 2) {
+                    ctx.drawImage(remoteVideoElem, width/2, 0, width/2, height);
+                }
+                
+                // Continue animation
+                if (isRecording) {
+                    requestAnimationFrame(drawVideos);
+                }
+            } catch (e) {
+                console.error("Error drawing videos to canvas:", e);
+                if (isRecording) {
+                    requestAnimationFrame(drawVideos);
+                }
+            }
+        }
+        
+        // Start drawing after a short delay to ensure the video elements are ready
+        setTimeout(() => {
+            drawVideos();
+            
+            // Create a stream from the canvas
+            const canvasStream = canvas.captureStream(30); // 30 FPS
+            
+            // Add the mixed audio to the canvas stream
+            canvasStream.addTrack(destination.stream.getAudioTracks()[0]);
+            
+            // Check for supported MIME types
+            let options;
+            if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')) {
+                options = { mimeType: 'video/webm;codecs=vp9,opus' };
+            } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')) {
+                options = { mimeType: 'video/webm;codecs=vp8,opus' };
+            } else if (MediaRecorder.isTypeSupported('video/webm')) {
+                options = { mimeType: 'video/webm' };
+            } else {
+                options = {};
+            }
+            
+            // Setup media recorder with the combined stream
+            mediaRecorder = new MediaRecorder(canvasStream, options);
+            
+            mediaRecorder.ondataavailable = (event) => {
+                console.log("Data available:", event.data.size);
+                if (event.data && event.data.size > 0) {
+                    recordedChunks.push(event.data);
+                }
+            };
+            
+            mediaRecorder.onstop = () => {
+                console.log("MediaRecorder stopped, chunks:", recordedChunks.length);
+                
+                if (recordedChunks.length === 0) {
+                    console.error("No recorded chunks available");
+                    alert("Recording failed. No data was captured.");
+                    return;
+                }
+                
+                const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'video/webm' });
+                console.log("Blob created, size:", blob.size);
+                
+                if (blob.size === 0) {
+                    console.error("Created blob has zero size");
+                    alert("Recording failed. The recorded file is empty.");
+                    return;
+                }
+                
+                const url = URL.createObjectURL(blob);
+                
+                // Display recording notification and download option
+                const recordingElement = document.createElement('div');
+                recordingElement.classList.add('file-message');
+                recordingElement.classList.add('sent');
+                
+                recordingElement.innerHTML = `
+                    <div class="file-icon">🎥</div>
+                    <div class="file-info">
+                        <div class="file-name">Call Recording</div>
+                        <div class="file-size">${formatFileSize(blob.size)}</div>
+                    </div>
+                `;
+                
+                const downloadButton = document.createElement('button');
+                downloadButton.classList.add('file-download');
+                downloadButton.textContent = 'Download';
+                downloadButton.onclick = () => {
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `call-recording-${new Date().toISOString().replace(/:/g, '-')}.webm`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                };
+                
+                const playButton = document.createElement('button');
+                playButton.classList.add('file-download');
+                playButton.style.marginRight = '5px';
+                playButton.textContent = 'Play';
+                playButton.onclick = () => {
+                    const videoElement = document.createElement('video');
+                    videoElement.src = url;
+                    videoElement.controls = true;
+                    videoElement.style.position = 'fixed';
+                    videoElement.style.top = '50%';
+                    videoElement.style.left = '50%';
+                    videoElement.style.transform = 'translate(-50%, -50%)';
+                    videoElement.style.maxWidth = '90%';
+                    videoElement.style.maxHeight = '90%';
+                    videoElement.style.zIndex = '1001';
+                    videoElement.style.backgroundColor = '#000';
+                    
+                    const closeButton = document.createElement('button');
+                    closeButton.textContent = '✕';
+                    closeButton.style.position = 'fixed';
+                    closeButton.style.top = '10px';
+                    closeButton.style.right = '10px';
+                    closeButton.style.zIndex = '1002';
+                    closeButton.style.backgroundColor = 'rgba(0,0,0,0.5)';
+                    closeButton.style.color = 'white';
+                    closeButton.style.border = 'none';
+                    closeButton.style.borderRadius = '50%';
+                    closeButton.style.width = '30px';
+                    closeButton.style.height = '30px';
+                    closeButton.style.cursor = 'pointer';
+                    
+                    const overlay = document.createElement('div');
+                    overlay.style.position = 'fixed';
+                    overlay.style.top = '0';
+                    overlay.style.left = '0';
+                    overlay.style.right = '0';
+                    overlay.style.bottom = '0';
+                    overlay.style.backgroundColor = 'rgba(0,0,0,0.8)';
+                    overlay.style.zIndex = '1000';
+                    
+                    closeButton.onclick = () => {
+                        document.body.removeChild(videoElement);
+                        document.body.removeChild(closeButton);
+                        document.body.removeChild(overlay);
+                    };
+                    
+                    document.body.appendChild(overlay);
+                    document.body.appendChild(videoElement);
+                    document.body.appendChild(closeButton);
+                    
+                    videoElement.play().catch(e => console.error("Error playing video:", e));
+                };
+                
+                recordingElement.appendChild(playButton);
+                recordingElement.appendChild(downloadButton);
+                chatMessages.appendChild(recordingElement);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                
+                // Cleanup
+                recordedChunks = [];
+            };
+            
+            // Start recording
+            mediaRecorder.start(1000); // Collect data in 1-second chunks
+            console.log("MediaRecorder started");
+            isRecording = true;
+            recordButton.textContent = '⏹️';
+            recordButton.classList.add('active');
+            
+            // Notify the user
+            const notificationElement = document.createElement('div');
+            notificationElement.classList.add('recording-notification');
+            notificationElement.textContent = 'Recording started';
+            document.body.appendChild(notificationElement);
+            
+            setTimeout(() => {
+                notificationElement.classList.add('fade-out');
+                setTimeout(() => {
+                    document.body.removeChild(notificationElement);
+                }, 500);
+            }, 2000);
+        }, 1000); // Wait 1 second before starting to ensure video elements are ready
+        
+    } catch (error) {
+        console.error('Error starting recording:', error);
+        alert('Could not start recording: ' + error.message);
+    }
+}
+
+// Stop recording the call
+function stopRecording() {
+    if (mediaRecorder && isRecording) {
+        console.log("Stopping MediaRecorder...");
+        try {
+            mediaRecorder.stop();
+        } catch (e) {
+            console.error("Error stopping MediaRecorder:", e);
+        }
+        isRecording = false;
+        recordButton.textContent = '⚫';
+        recordButton.classList.remove('active');
+        
+        // Notify the user
+        const notificationElement = document.createElement('div');
+        notificationElement.classList.add('recording-notification');
+        notificationElement.textContent = 'Recording saved';
+        document.body.appendChild(notificationElement);
+        
+        setTimeout(() => {
+            notificationElement.classList.add('fade-out');
+            setTimeout(() => {
+                document.body.removeChild(notificationElement);
+            }, 500);
+        }, 2000);
+    }
+}
+
+// Format file size for display
+function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
 // Start a call
 async function startCall() {
     if (!selectedUserId || !localStream) return;
@@ -556,6 +877,11 @@ async function startCall() {
 
 // End the call
 function endCall() {
+    // Stop recording if it's in progress
+    if (isRecording) {
+        stopRecording();
+    }
+    
     if (peerConnection) {
         peerConnection.close();
         peerConnection = null;
@@ -630,6 +956,252 @@ function testConnection() {
     });
 }
 
+// Toggle whiteboard visibility
+function toggleWhiteboard() {
+    if (!isWhiteboardVisible) {
+        showWhiteboard();
+    } else {
+        hideWhiteboard();
+    }
+}
+
+// Show whiteboard
+function showWhiteboard() {
+    whiteboardContainer.style.display = 'flex';
+    isWhiteboardVisible = true;
+    whiteboardButton.classList.add('active');
+    
+    // Initialize whiteboard canvas
+    initializeWhiteboard();
+}
+
+// Hide whiteboard
+function hideWhiteboard() {
+    whiteboardContainer.style.display = 'none';
+    isWhiteboardVisible = false;
+    whiteboardButton.classList.remove('active');
+}
+
+// Initialize whiteboard
+function initializeWhiteboard() {
+    // Set canvas to fill its container
+    resizeWhiteboard();
+    
+    // Get the 2D drawing context
+    whiteboardCtx = whiteboard.getContext('2d');
+    
+    // Set initial drawing properties
+    updateDrawingConfig();
+    
+    // Clear canvas
+    clearWhiteboardCanvas();
+    
+    // Add event listeners for drawing
+    whiteboard.addEventListener('mousedown', startDrawing);
+    whiteboard.addEventListener('mousemove', draw);
+    whiteboard.addEventListener('mouseup', stopDrawing);
+    whiteboard.addEventListener('mouseleave', stopDrawing);
+    
+    // Add touch support
+    whiteboard.addEventListener('touchstart', handleTouchStart);
+    whiteboard.addEventListener('touchmove', handleTouchMove);
+    whiteboard.addEventListener('touchend', handleTouchEnd);
+    
+    // Add event listeners for toolbar
+    penTool.addEventListener('click', () => setDrawingTool('pen'));
+    eraserTool.addEventListener('click', () => setDrawingTool('eraser'));
+    colorPicker.addEventListener('input', updateDrawingConfig);
+    penSize.addEventListener('change', updateDrawingConfig);
+    clearWhiteboard.addEventListener('click', sendClearWhiteboard);
+    closeWhiteboard.addEventListener('click', hideWhiteboard);
+    
+    // Handle resize
+    window.addEventListener('resize', resizeWhiteboard);
+}
+
+// Resize whiteboard to fit container
+function resizeWhiteboard() {
+    const container = whiteboardContainer;
+    const toolbarHeight = document.querySelector('.whiteboard-toolbar').offsetHeight;
+    const paddingTop = parseInt(window.getComputedStyle(container).paddingTop);
+    const paddingBottom = parseInt(window.getComputedStyle(container).paddingBottom);
+    const availableHeight = container.offsetHeight - toolbarHeight - paddingTop - paddingBottom - 15;
+    
+    // Save the current drawing
+    const imageData = whiteboardCtx ? whiteboardCtx.getImageData(0, 0, whiteboard.width, whiteboard.height) : null;
+    
+    // Set new dimensions
+    whiteboard.width = container.offsetWidth - 40;  // 20px padding on each side
+    whiteboard.height = availableHeight;
+    
+    // Restore the drawing if there was one
+    if (imageData && whiteboardCtx) {
+        whiteboardCtx.putImageData(imageData, 0, 0);
+        updateDrawingConfig();
+    }
+}
+
+// Update drawing configuration
+function updateDrawingConfig() {
+    if (!whiteboardCtx) return;
+    
+    if (currentTool === 'pen') {
+        whiteboardCtx.strokeStyle = colorPicker.value;
+        whiteboardCtx.lineWidth = parseInt(penSize.value);
+        whiteboardCtx.lineCap = 'round';
+        whiteboardCtx.lineJoin = 'round';
+    } else if (currentTool === 'eraser') {
+        whiteboardCtx.strokeStyle = '#ffffff';
+        whiteboardCtx.lineWidth = parseInt(penSize.value) * 2;
+        whiteboardCtx.lineCap = 'round';
+        whiteboardCtx.lineJoin = 'round';
+    }
+}
+
+// Set active drawing tool
+function setDrawingTool(tool) {
+    currentTool = tool;
+    
+    // Update UI
+    if (tool === 'pen') {
+        penTool.classList.add('active');
+        eraserTool.classList.remove('active');
+    } else if (tool === 'eraser') {
+        eraserTool.classList.add('active');
+        penTool.classList.remove('active');
+    }
+    
+    updateDrawingConfig();
+}
+
+// Clear whiteboard canvas
+function clearWhiteboardCanvas() {
+    if (whiteboardCtx) {
+        whiteboardCtx.fillStyle = '#ffffff';
+        whiteboardCtx.fillRect(0, 0, whiteboard.width, whiteboard.height);
+    }
+}
+
+// Send clear whiteboard command to remote peer
+function sendClearWhiteboard() {
+    clearWhiteboardCanvas();
+    
+    if (dataChannel && dataChannel.readyState === 'open') {
+        dataChannel.send(JSON.stringify({
+            type: 'whiteboard-clear'
+        }));
+    }
+}
+
+// Start drawing
+function startDrawing(e) {
+    isDrawing = true;
+    const pos = getWhiteboardPosition(e);
+    lastX = pos.x;
+    lastY = pos.y;
+}
+
+// Draw on move
+function draw(e) {
+    if (!isDrawing) return;
+    
+    const pos = getWhiteboardPosition(e);
+    const currentX = pos.x;
+    const currentY = pos.y;
+    
+    // Draw the line
+    whiteboardCtx.beginPath();
+    whiteboardCtx.moveTo(lastX, lastY);
+    whiteboardCtx.lineTo(currentX, currentY);
+    whiteboardCtx.stroke();
+    
+    // Send to peer (throttled)
+    sendDrawCommand(lastX, lastY, currentX, currentY);
+    
+    // Update last position
+    lastX = currentX;
+    lastY = currentY;
+}
+
+// Stop drawing
+function stopDrawing() {
+    isDrawing = false;
+}
+
+// Get position relative to whiteboard
+function getWhiteboardPosition(e) {
+    const rect = whiteboard.getBoundingClientRect();
+    const x = (e.clientX || e.touches[0].clientX) - rect.left;
+    const y = (e.clientY || e.touches[0].clientY) - rect.top;
+    return { x, y };
+}
+
+// Handle touch events
+function handleTouchStart(e) {
+    e.preventDefault();
+    startDrawing(e);
+}
+
+function handleTouchMove(e) {
+    e.preventDefault();
+    draw(e);
+}
+
+function handleTouchEnd(e) {
+    e.preventDefault();
+    stopDrawing();
+}
+
+// Send draw command to peer (throttled for performance)
+function sendDrawCommand(startX, startY, endX, endY) {
+    if (!dataChannel || dataChannel.readyState !== 'open') return;
+    
+    if (!throttleTimer) {
+        throttleTimer = setTimeout(() => {
+            dataChannel.send(JSON.stringify({
+                type: 'whiteboard-draw',
+                startX: startX / whiteboard.width,  // Send relative positions (0-1)
+                startY: startY / whiteboard.height,
+                endX: endX / whiteboard.width,
+                endY: endY / whiteboard.height,
+                color: whiteboardCtx.strokeStyle,
+                width: whiteboardCtx.lineWidth,
+                tool: currentTool
+            }));
+            throttleTimer = null;
+        }, 10);  // 10ms throttle
+    }
+}
+
+// Draw stroke from remote peer
+function drawRemoteStroke(relStartX, relStartY, relEndX, relEndY, color, width, tool) {
+    if (!whiteboardCtx) return;
+    
+    // Convert relative positions (0-1) to actual canvas positions
+    const startX = relStartX * whiteboard.width;
+    const startY = relStartY * whiteboard.height;
+    const endX = relEndX * whiteboard.width;
+    const endY = relEndY * whiteboard.height;
+    
+    // Save current context state
+    const currentStyle = whiteboardCtx.strokeStyle;
+    const currentWidth = whiteboardCtx.lineWidth;
+    
+    // Set remote peer's style
+    whiteboardCtx.strokeStyle = tool === 'eraser' ? '#ffffff' : color;
+    whiteboardCtx.lineWidth = width;
+    
+    // Draw the line
+    whiteboardCtx.beginPath();
+    whiteboardCtx.moveTo(startX, startY);
+    whiteboardCtx.lineTo(endX, endY);
+    whiteboardCtx.stroke();
+    
+    // Restore context state
+    whiteboardCtx.strokeStyle = currentStyle;
+    whiteboardCtx.lineWidth = currentWidth;
+}
+
 // Event Listeners
 startButton.addEventListener('click', startLocalStream);
 callButton.addEventListener('click', startCall);
@@ -643,6 +1215,8 @@ messageInput.addEventListener('keypress', (e) => {
 toggleAudioButton.addEventListener('click', toggleAudio);
 toggleVideoButton.addEventListener('click', toggleVideo);
 screenShareButton.addEventListener('click', toggleScreenShare);
+recordButton.addEventListener('click', toggleRecording);
+whiteboardButton.addEventListener('click', toggleWhiteboard);
 fileInput.addEventListener('change', handleFileSelect);
 if (testConnectionButton) {
     testConnectionButton.addEventListener('click', testConnection);
