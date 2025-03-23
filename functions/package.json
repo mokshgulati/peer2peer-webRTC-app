@@ -1,0 +1,12 @@
+{
+  "name": "socketio-server",
+  "version": "1.0.0",
+  "description": "Socket.IO server as Netlify function",
+  "main": "socketio-server.js",
+  "dependencies": {
+    "express": "^4.18.2",
+    "serverless-http": "^3.2.0",
+    "socket.io": "^4.7.4",
+    "cors": "^2.8.5"
+  }
+}

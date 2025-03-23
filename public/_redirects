@@ -1,0 +1,3 @@
+/socket.io/*  /.netlify/functions/socketio-server/:splat  200
+/api/*  /.netlify/functions/:splat  200
+/*      /index.html   200 

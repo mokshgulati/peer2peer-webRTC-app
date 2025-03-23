@@ -195,4 +195,42 @@ MIT License - feel free to use this project for any purpose.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request. 
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## Deployment
+
+### Deploying to Netlify
+
+This application supports deployment on Netlify using serverless functions:
+
+1. Create a Netlify account at [netlify.com](https://www.netlify.com/)
+
+2. Install Netlify CLI (if not already installed):
+   ```bash
+   npm install -g netlify-cli
+   ```
+
+3. Login to Netlify from the command line:
+   ```bash
+   netlify login
+   ```
+
+4. Test locally with Netlify Dev:
+   ```bash
+   npm run netlify:dev
+   ```
+
+5. Deploy to Netlify:
+   ```bash
+   netlify deploy --prod
+   ```
+   
+6. When prompted, choose the 'public' folder as your publish directory
+
+7. Your application will be deployed and available at the URL provided by Netlify
+
+### Troubleshooting Netlify Deployment
+
+- If WebSocket connections fail, ensure the `_redirects` file is properly deployed
+- Check Netlify function logs for any server-side errors
+- For persistent issues, consider using the Netlify UI to configure your build settings 
