@@ -189,10 +189,6 @@ peer2peer-webrtc-app/
    - Close other applications using camera/microphone
    - Try refreshing the page
 
-## License
-
-MIT License - feel free to use this project for any purpose.
-
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.

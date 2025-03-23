@@ -52,7 +52,6 @@ All notable changes to the Peer-to-Peer WebRTC Application will be documented in
   - Troubleshooting guide
   - Project structure
   - Contributing guidelines
-- Added MIT License file
 - Enhanced code comments and documentation
 
 #### Development
